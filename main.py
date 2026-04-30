@@ -28,6 +28,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
 # Initialize External Services
 supabase = create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY"))
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
@@ -36,6 +38,24 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 class ChatRequest(BaseModel):
     prompt: str
     context_data: list
+
+
+# --- UPSTOX MASTER LOOKUP ---
+# Load this ONCE when the server boots so it is lightning fast on clicks
+print("Downloading Upstox Master CSV...")
+try:
+    fileUrl = 'https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz'
+    symboldf = pd.read_csv(fileUrl)
+    
+    # Filtering for Equity stocks (kept broad to catch both BSE/NSE based on your scans)
+    eq_stocks = symboldf[symboldf['instrument_type'].str.contains('EQ', case=False, na=False) & (symboldf['last_price'] > 0)]
+    upstox_mapping = eq_stocks[['instrument_key', 'name', 'exchange_token']]
+    print("Upstox Master loaded successfully!")
+except Exception as e:
+    print(f"Failed to load Upstox Master: {e}")
+    upstox_mapping = pd.DataFrame()
+
+
 
 @app.get("/api/swing-momentum")
 def get_swing_data(date: str):
@@ -71,11 +91,21 @@ def analyze_stocks(request: ChatRequest):
 
 
 
-@app.get("/api/stock-history/{instrument}")
-def get_stock_history(instrument: str):
+@app.get("/api/stock-history/{stock_name}")
+def get_stock_history(stock_name: str):
     try:
-        # Upstox requires the instrument to be URL encoded (e.g. NSE_EQ|INE123...)
-        instrument_encoded = urllib.parse.quote(instrument)
+        # 1. Use the Streamlit logic: Find the match in the Master CSV
+        match = upstox_mapping[upstox_mapping['name'] == stock_name]
+        
+        if match.empty:
+            raise HTTPException(status_code=404, detail=f"Symbol '{stock_name}' not found in Upstox list.")
+        
+        # 2. Extract the key safely
+        instrument_key = match['instrument_key'].iloc[0]
+        print(f"Translated {stock_name} -> {instrument_key}")
+        
+        # 3. Fetch from Upstox using the real key
+        instrument_encoded = urllib.parse.quote(instrument_key)
         today = datetime.date.today()
         to_date = today.strftime('%Y-%m-%d')
         from_date = (today - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
@@ -86,20 +116,16 @@ def get_stock_history(instrument: str):
         if 'data' not in candleRes or 'candles' not in candleRes['data']:
             raise HTTPException(status_code=404, detail="No candle data found for this instrument")
 
-        # Convert to DataFrame
+        # 4. Format for TradingView Light Charts
         candleData = pd.DataFrame(candleRes['data']['candles'])
         candleData.columns = ['date', 'open', 'high', 'low', 'close', 'vol', 'oi']
         
-        # TradingView requires time in 'YYYY-MM-DD' string format, sorted oldest to newest
         candleData['time'] = pd.to_datetime(candleData['date']).dt.tz_convert('Asia/Kolkata').dt.strftime('%Y-%m-%d')
         candleData = candleData[['time', 'open', 'high', 'low', 'close']]
         candleData.sort_values(by='time', inplace=True)
         
-        # Convert DataFrame to a list of dictionaries for the JSON response
         return candleData.to_dict(orient='records')
         
     except Exception as e:
         print(f"Exception when calling HistoryApi: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-# Test
