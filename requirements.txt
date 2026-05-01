@@ -6,6 +6,5 @@ google-generativeai
 python-dotenv
 requests
 apscheduler
-setuptools
-pandas-ta==0.3.14b
+pandas-ta
 breeze-connect
