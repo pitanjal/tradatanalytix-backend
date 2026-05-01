@@ -56,7 +56,7 @@ def scheduled_daily_sync():
 
 scheduler = BackgroundScheduler()
 # Set to 1:30 AM IST to ensure market close data is fully processed by providers
-scheduler.add_job(scheduled_daily_sync, 'cron', hour=12, minute=10, timezone="Asia/Kolkata")
+scheduler.add_job(scheduled_daily_sync, 'cron', hour=12, minute=20, timezone="Asia/Kolkata")
 
 @app.on_event("startup")
 def start_scheduler():
