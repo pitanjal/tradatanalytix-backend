@@ -6,3 +6,5 @@ google-generativeai
 python-dotenv
 requests
 apscheduler
+pandas-ta
+breeze-connect
