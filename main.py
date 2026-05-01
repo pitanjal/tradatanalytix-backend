@@ -7,7 +7,7 @@ from supabase import create_client
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv
-
+from daily_sync import run_daily_upload
 import urllib.parse
 import datetime
 import requests
@@ -56,7 +56,7 @@ def scheduled_daily_sync():
 
 scheduler = BackgroundScheduler()
 # Set to 1:30 AM IST to ensure market close data is fully processed by providers
-scheduler.add_job(scheduled_daily_sync, 'cron', hour=13, minute=45, timezone="Asia/Kolkata")
+scheduler.add_job(scheduled_daily_sync, 'cron', hour=13, minute=55, timezone="Asia/Kolkata")
 
 @app.on_event("startup")
 def start_scheduler():
