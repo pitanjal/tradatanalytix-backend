@@ -1,4 +1,28 @@
+import os
+import pandas as pd
+import numpy as np
+import traceback, requests
+import datetime
+import warnings
+import urllib.parse
+import pandas_ta as ta
+from time import sleep
+from supabase import create_client
+from dotenv import load_dotenv
+
+warnings.filterwarnings('ignore')
+load_dotenv()
+
+# Initialize globals outside so they are available to main.py if needed
+counter = 0
+df_nifty = pd.DataFrame()
+
+
+
 def run_daily_upload():
+
+        global counter
+        global df_nifty
 
         import pandas as pd
         import numpy as np
@@ -57,7 +81,7 @@ def run_daily_upload():
 
         print("got bse stocks")
 
-        global counter
+        # global counter
         counter = 0
         df_result = pd.DataFrame()
 
@@ -77,7 +101,7 @@ def run_daily_upload():
         data4['low_n'] = data3["low"].astype(float)
         data4['open_n'] = data3["open"].astype(float)
         #data4['dt'] = data3['dt']
-        global df_nifty
+        # global df_nifty
         df_nifty = pd.DataFrame(data4)
 
         print("Got Nifty data")
@@ -316,12 +340,12 @@ def run_daily_upload():
         data4['low_n'] = data3["low"].astype(float)
         data4['open_n'] = data3["open"].astype(float)
 
-        global df_nifty
+        # global df_nifty
         df_nifty = pd.DataFrame(data4)
 
 
 
-        global counter
+        # global counter
         counter = 0
         df_result = pd.DataFrame()
 
