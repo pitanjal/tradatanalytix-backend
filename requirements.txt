@@ -4,3 +4,5 @@ pandas
 supabase
 google-generativeai
 python-dotenv
+requests
+apscheduler
