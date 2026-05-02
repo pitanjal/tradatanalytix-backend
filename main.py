@@ -7,12 +7,14 @@ from supabase import create_client
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv
+from daily_sync import run_daily_upload
 import urllib.parse
 import datetime
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# --- IMPORT YOUR SYNC FUNCTION ---
+
+# --- NEW: IMPORT YOUR SYNC FUNCTION ---
 try:
     from daily_sync import run_daily_upload
 except ImportError:
@@ -37,7 +39,7 @@ app.add_middleware(
 supabase = create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY"))
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# Gemini 1.5 Flash configuration
+# Note: Gemini 1.5 Flash is the standard naming, ensured compatibility here
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 class ChatRequest(BaseModel):
@@ -54,35 +56,27 @@ def scheduled_daily_sync():
         print(f"[{datetime.datetime.now()}] ERROR in scheduled task: {e}")
 
 scheduler = BackgroundScheduler()
-# Updated to 18:30 IST as per your script requirement
+# Set to 1:30 AM IST to ensure market close data is fully processed by providers
 scheduler.add_job(scheduled_daily_sync, 'cron', hour=18, minute=30, timezone="Asia/Kolkata")
 
 @app.on_event("startup")
 def start_scheduler():
     if not scheduler.running:
         scheduler.start()
-        print("Background Scheduler started: Daily sync active for 06:30 PM IST.")
+        print("Background Scheduler started: Daily sync active for 01:30 AM IST.")
 
 @app.on_event("shutdown")
 def stop_scheduler():
     scheduler.shutdown()
     print("Background Scheduler shut down.")
 
-# --- UPSTOX MASTER LOOKUP (Pre-loaded for efficiency) ---
+# --- UPSTOX MASTER LOOKUP ---
 print("Downloading Upstox Master CSV...")
 try:
     fileUrl = 'https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz'
     symboldf = pd.read_csv(fileUrl)
-    # Filter for BSE Equity stocks specifically for the mapping
-    bse_eq = symboldf[symboldf['exchange'].str.contains('BSE', case=False, na=False) & 
-                     symboldf['instrument_type'].str.contains('EQ', case=False, na=False)]
-    
-    # Mapping for joins: BSE Code is the exchange_token
-    upstox_mapping = bse_eq[['instrument_key', 'name', 'exchange_token']].rename(
-        columns={'exchange_token': 'BSE Code'}
-    )
-    # Ensure BSE Code is string for merging
-    upstox_mapping['BSE Code'] = upstox_mapping['BSE Code'].astype(str)
+    eq_stocks = symboldf[symboldf['instrument_type'].str.contains('EQ', case=False, na=False) & (symboldf['last_price'] > 0)]
+    upstox_mapping = eq_stocks[['instrument_key', 'name', 'exchange_token']]
     print("Upstox Master loaded successfully!")
 except Exception as e:
     print(f"Failed to load Upstox Master: {e}")
@@ -91,48 +85,23 @@ except Exception as e:
 @app.get("/api/swing-momentum")
 def get_swing_data(date: str):
     try:
-        # 1. Fetch Today's Scans
         start_of_day = f"{date}T00:00:00"
         end_of_day = f"{date}T23:59:59"
         
-        scan_res = supabase.table("daily_scans_test").select("*").gte("created_at", start_of_day).lte("created_at", end_of_day).execute()
-        df_scans = pd.DataFrame(scan_res.data)
+        response = (
+            supabase.table("daily_scans_test")
+            .select("*")
+            .gte("created_at", start_of_day)
+            .lte("created_at", end_of_day)
+            .execute()
+        )
         
-        if df_scans.empty:
+        df = pd.DataFrame(response.data)
+        if df.empty:
             return {"status": "success", "data": []}
-
-        # 2. Fetch Fundamentals & Full Technicals from Supabase
-        funda_res = supabase.table("company_fundamentals").select("*").execute()
-        df_funda = pd.DataFrame(funda_res.data).drop_duplicates(subset=['BSE Code'])
-        df_funda['BSE Code'] = df_funda['BSE Code'].astype(str)
-
-        tech_res = supabase.table("all_stocks_technicals").select("*").execute()
-        df_tech = pd.DataFrame(tech_res.data).rename(columns={'Symbol': 'instrument_key'})
-
-        # 3. Multi-Stage Merge
-        # Attach BSE Code to scans via Upstox Mapping
-        df_merged = pd.merge(df_scans, upstox_mapping[['instrument_key', 'BSE Code']], on='instrument_key', how='left')
-        
-        # Merge with Fundamentals
-        df_merged = pd.merge(df_merged, df_funda, on='BSE Code', how='left')
-        
-        # Merge with Technicals
-        df_final = pd.merge(df_merged, df_tech, on='instrument_key', how='left')
-
-        # 4. Filter and Clean
-        # Remove Non-tradable instruments (MFs/ETFs) by requiring Market Cap
-        df_final = df_final[df_final['Market Capitalization'].notna()]
-        
-        # Handle placeholder -99 for cleaner JSON response
-        cols_to_null = ['Dist_EMA_200 %', 'RS (21)', 'RS (123)', 'dist_ema_200', 'rs_21', 'rs_123']
-        for col in cols_to_null:
-            if col in df_final.columns:
-                df_final[col] = df_final[col].replace(-99, None)
-        
-        return {"status": "success", "data": df_final.to_dict(orient="records")}
-        
+            
+        return {"status": "success", "data": df.to_dict(orient="records")}
     except Exception as e:
-        print(f"Error in swing-momentum: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/ai-chat")
@@ -164,6 +133,7 @@ def get_stock_history(stock_name: str):
         candleData = pd.DataFrame(candleRes['data']['candles'])
         candleData.columns = ['date', 'open', 'high', 'low', 'close', 'vol', 'oi']
         
+        # Convert and sort for Light Charts
         candleData['time'] = pd.to_datetime(candleData['date']).dt.tz_convert('Asia/Kolkata').dt.strftime('%Y-%m-%d')
         candleData = candleData[['time', 'open', 'high', 'low', 'close']]
         candleData.sort_values(by='time', inplace=True)
@@ -179,3 +149,63 @@ def health_check():
         "scheduler_running": scheduler.running,
         "server_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
