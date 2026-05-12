@@ -145,6 +145,7 @@ def get_swing_data(date: str):
         df_merged_2 = pd.merge(df_merged_1, df_funda, on='ISIN', how='inner')
         print(f"Rows after Fundamentals merge: {len(df_merged_2)}")
 
+
         # Step C: Technicals merge
         df_final = pd.merge(df_merged_2, df_tech, on='instrument_key', how='left')
 
@@ -152,6 +153,10 @@ def get_swing_data(date: str):
         # Set to 500 as per your latest local logic
         df_final = df_final[df_final['Market Capitalization'] > 500]
         print(f"Final rows after Market Cap filter: {len(df_final)}")
+
+        # --- OR ALTERNATIVELY: Rename it back after the merge ---
+        if 'Days since consolidation_x' in df_final.columns:
+            df_final = df_final.rename(columns={'Days since consolidation_x': 'Days since consolidation'})
 
         # Replace placeholders
         cols_to_fix = ['Dist_EMA_200 %', 'RS (21)', 'RS (123)', 'dist_ema_200', 'rs_21', 'rs_123']
