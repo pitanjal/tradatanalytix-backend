@@ -71,38 +71,98 @@ def stop_scheduler():
     print("Background Scheduler shut down.")
 
 # --- UPSTOX MASTER LOOKUP ---
+# --- UPSTOX MASTER LOOKUP (Pre-loaded for efficiency) ---
 print("Downloading Upstox Master CSV...")
 try:
     fileUrl = 'https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz'
     symboldf = pd.read_csv(fileUrl)
-    eq_stocks = symboldf[symboldf['instrument_type'].str.contains('EQ', case=False, na=False) & (symboldf['last_price'] > 0)]
-    upstox_mapping = eq_stocks[['instrument_key', 'name', 'exchange_token']]
+    # Filter for BSE Equity stocks specifically for the mapping
+    bse_eq = symboldf[symboldf['exchange'].str.contains('BSE', case=False, na=False) & 
+                     symboldf['instrument_type'].str.contains('EQ', case=False, na=False)]
+    
+    # Mapping for joins: BSE Code is the exchange_token
+    upstox_mapping = bse_eq[['instrument_key', 'name', 'exchange_token']].rename(
+        columns={'exchange_token': 'BSE Code'}
+    )
+    # Ensure BSE Code is string for merging
+    upstox_mapping['BSE Code'] = upstox_mapping['BSE Code'].astype(str)
     print("Upstox Master loaded successfully!")
 except Exception as e:
     print(f"Failed to load Upstox Master: {e}")
     upstox_mapping = pd.DataFrame()
 
-@app.get("/api/swing-momentum")
-def get_swing_data(date: str):
-    try:
-        start_of_day = f"{date}T00:00:00"
-        end_of_day = f"{date}T23:59:59"
-        
+
+def fetch_all_supabase_data(table_name, batch_size=1000):
+    all_rows = []
+    start_index = 0
+    while True:
         response = (
-            supabase.table("daily_scans_test")
+            supabase.table(table_name)
             .select("*")
-            .gte("created_at", start_of_day)
-            .lte("created_at", end_of_day)
+            .range(start_index, start_index + batch_size - 1)
             .execute()
         )
-        
-        df = pd.DataFrame(response.data)
-        if df.empty:
+        chunk = response.data
+        all_rows.extend(chunk)
+        if len(chunk) < batch_size:
+            break
+        start_index += batch_size
+    return pd.DataFrame(all_rows)
+
+def get_swing_data(date: str):
+    try:
+        # 1. Fetch Today's Scans (Usually < 1000, but range-fetch for safety)
+        start_of_day = f"{date}T00:00:00"
+        end_of_day = f"{date}T23:59:59"
+
+        # Paginated fetch for scans just in case
+        df_scans = fetch_all_supabase_data("daily_scans_test")
+        # Filter for the specific date after fetching
+        df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
+        df_scans = df_scans[
+            (df_scans['created_at'] >= start_of_day) & 
+            (df_scans['created_at'] <= end_of_day)
+        ]
+
+        if df_scans.empty:
             return {"status": "success", "data": []}
-            
-        return {"status": "success", "data": df.to_dict(orient="records")}
+
+        # 2. Fetch COMPLETE Fundamentals & Technicals using pagination
+        df_funda = fetch_all_supabase_data("company_fundamentals")
+        df_funda = df_funda.drop_duplicates(subset=['BSE Code'])
+
+        df_tech = fetch_all_supabase_data("all_stocks_technicals")
+        df_tech = df_tech.rename(columns={'Symbol': 'instrument_key'})
+
+        # 3. Multi-Stage Merge (Using ISIN as your primary key)
+
+
+        # # Merge Scans with mapping to get extra info if needed
+        df_merged_1 = pd.merge(df_scans, upstox_mapping[['instrument_key', 'BSE Code', 'name']], on='name', how='left')
+        df_merged_1['ISIN'] = df_merged_1['instrument_key'].str.split('|').str[1]
+
+        # # Merge with Fundamentals on ISIN
+        df_merged_2 = pd.merge(df_merged_1, df_funda, on='ISIN', how='inner')
+
+        # # Merge with Technicals on instrument_key
+        df_final = pd.merge(df_merged_2, df_tech, on='instrument_key', how='left')
+
+        # # 4. Filter and Clean
+        # # Only include established companies (Market Cap > 200 Cr)
+        df_final = df_final[df_final['Market Capitalization'] > 500]
+
+        # # Clean placeholders
+        cols_to_fix = ['Dist_EMA_200 %', 'RS (21)', 'RS (123)', 'dist_ema_200', 'rs_21', 'rs_123']
+        for col in cols_to_fix:
+            if col in df_final.columns:
+                df_final[col] = df_final[col].replace(-99, None)
+        
+        return {"status": "success", "data": df_final.to_dict(orient="records")}
+        
     except Exception as e:
+        print(f"Error in swing-momentum: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/ai-chat")
 def analyze_stocks(request: ChatRequest):
