@@ -12,7 +12,7 @@ import urllib.parse
 import datetime
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
-
+import numpy as np
 
 # --- NEW: IMPORT YOUR SYNC FUNCTION ---
 try:
@@ -166,7 +166,7 @@ def get_swing_data(date: str):
         print(f"Error in swing-momentum: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-        
+
 
 @app.post("/api/ai-chat")
 def analyze_stocks(request: ChatRequest):
