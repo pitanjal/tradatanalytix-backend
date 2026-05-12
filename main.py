@@ -115,15 +115,14 @@ def get_swing_data(date: str):
         # Convert input date
         target_date = pd.to_datetime(date).date()
         
-        # 1. Fetch and Filter Scans
-        df_scans = fetch_all_supabase_data("daily_scans_test")
-        df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
+        # 1. Fetch Today's Scans (Filtered at DB level to save time)
+        # We use GTE/LTE here so we don't fetch all 19k rows every time
+        start_of_day = f"{date}T00:00:00"
+        end_of_day = f"{date}T23:59:59"
         
-        # Log row count before/after date filter
-        print(f"Total scans fetched: {len(df_scans)}")
-        df_scans = df_scans[df_scans['created_at'].dt.date == target_date]
-        print(f"Scans for {target_date}: {len(df_scans)}")
-
+        scan_res = supabase.table("daily_scans_test").select("*").gte("created_at", start_of_day).lte("created_at", end_of_day).execute()
+        df_scans = pd.DataFrame(scan_res.data)
+        
         if df_scans.empty:
             return {"status": "success", "data": []}
 
