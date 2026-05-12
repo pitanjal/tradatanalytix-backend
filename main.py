@@ -159,8 +159,15 @@ def get_swing_data(date: str):
         for col in cols_to_fix:
             if col in df_final.columns:
                 df_final[col] = df_final[col].replace({-99: None, np.nan: None})
+
+        # 2. Replace all NaN, Inf, and -Inf values with None (null in JSON)
+        # This prevents the "Out of range float values" error
+        df_final = df_final.replace([np.nan, np.inf, -np.inf], None)
         
-        return {"status": "success", "data": df_final.to_dict(orient="records")}
+        # 3. Final safety conversion to ensure all records are serializable
+        data_records = df_final.to_dict(orient="records")
+        
+        return {"status": "success", "data": data_records}
         
     except Exception as e:
         print(f"Error in swing-momentum: {e}")
