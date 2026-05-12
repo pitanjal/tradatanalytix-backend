@@ -109,53 +109,56 @@ def fetch_all_supabase_data(table_name, batch_size=1000):
         start_index += batch_size
     return pd.DataFrame(all_rows)
 
+@app.get("/api/swing-momentum")
 def get_swing_data(date: str):
     try:
-        # 1. Fetch Today's Scans (Usually < 1000, but range-fetch for safety)
-        start_of_day = f"{date}T00:00:00"
-        end_of_day = f"{date}T23:59:59"
-
-        # Paginated fetch for scans just in case
+        # Convert input date
+        target_date = pd.to_datetime(date).date()
+        
+        # 1. Fetch and Filter Scans
         df_scans = fetch_all_supabase_data("daily_scans_test")
-        # Filter for the specific date after fetching
         df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
-        df_scans = df_scans[
-            (df_scans['created_at'] >= start_of_day) & 
-            (df_scans['created_at'] <= end_of_day)
-        ]
+        
+        # Log row count before/after date filter
+        print(f"Total scans fetched: {len(df_scans)}")
+        df_scans = df_scans[df_scans['created_at'].dt.date == target_date]
+        print(f"Scans for {target_date}: {len(df_scans)}")
 
         if df_scans.empty:
             return {"status": "success", "data": []}
 
-        # 2. Fetch COMPLETE Fundamentals & Technicals using pagination
+        # 2. Fetch Fundamentals & Technicals
         df_funda = fetch_all_supabase_data("company_fundamentals")
         df_funda = df_funda.drop_duplicates(subset=['BSE Code'])
-
         df_tech = fetch_all_supabase_data("all_stocks_technicals")
         df_tech = df_tech.rename(columns={'Symbol': 'instrument_key'})
 
-        # 3. Multi-Stage Merge (Using ISIN as your primary key)
-
-
-        # # Merge Scans with mapping to get extra info if needed
+        # 3. Multi-Stage Merge
+        # Step A: Get BSE Code and Name mapping
         df_merged_1 = pd.merge(df_scans, upstox_mapping[['instrument_key', 'BSE Code', 'name']], on='name', how='left')
         df_merged_1['ISIN'] = df_merged_1['instrument_key'].str.split('|').str[1]
-
-        # # Merge with Fundamentals on ISIN
+        
+        # Step B: Fundamentals merge
+        # Force string types to ensure matching
+        df_merged_1['ISIN'] = df_merged_1['ISIN'].astype(str)
+        df_funda['ISIN'] = df_funda['ISIN'].astype(str)
+        
         df_merged_2 = pd.merge(df_merged_1, df_funda, on='ISIN', how='inner')
+        print(f"Rows after Fundamentals merge: {len(df_merged_2)}")
 
-        # # Merge with Technicals on instrument_key
+        # Step C: Technicals merge
         df_final = pd.merge(df_merged_2, df_tech, on='instrument_key', how='left')
 
-        # # 4. Filter and Clean
-        # # Only include established companies (Market Cap > 200 Cr)
+        # 4. Filter and Clean
+        # Set to 500 as per your latest local logic
         df_final = df_final[df_final['Market Capitalization'] > 500]
+        print(f"Final rows after Market Cap filter: {len(df_final)}")
 
-        # # Clean placeholders
+        # Replace placeholders
         cols_to_fix = ['Dist_EMA_200 %', 'RS (21)', 'RS (123)', 'dist_ema_200', 'rs_21', 'rs_123']
         for col in cols_to_fix:
             if col in df_final.columns:
-                df_final[col] = df_final[col].replace(-99, None)
+                df_final[col] = df_final[col].replace({-99: None, np.nan: None})
         
         return {"status": "success", "data": df_final.to_dict(orient="records")}
         
@@ -163,6 +166,7 @@ def get_swing_data(date: str):
         print(f"Error in swing-momentum: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+        
 
 @app.post("/api/ai-chat")
 def analyze_stocks(request: ChatRequest):
