@@ -8,3 +8,4 @@ requests
 apscheduler
 pandas-ta
 breeze-connect
+numpy
